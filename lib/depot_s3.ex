@@ -4,21 +4,36 @@ defmodule DepotS3 do
 
   ## Direct usage
 
-      iex> {:ok, prefix} = Briefly.create(directory: true)
-      iex> filesystem = Depot.Adapter.Local.configure(prefix: prefix)
-      iex> :ok = Depot.write(filesystem, "test.txt", "Hello World")
-      iex> {:ok, "Hello World"} = Depot.read(filesystem, "test.txt")
+      config = [
+        access_key_id: "key",
+        secret_access_key: "secret",
+        scheme: "https://",
+        region: "eu-west-1",
+        host: "s3.eu-west-1.amazonaws.com",
+        port: 443
+      ]
+      filesystem = DepotS3.configure(config: config, bucket: "default")
+      :ok = Depot.write(filesystem, "test.txt", "Hello World")
+      {:ok, "Hello World"} = Depot.read(filesystem, "test.txt")
 
   ## Usage with a module
 
-      defmodule LocalFileSystem do
+      defmodule S3FileSystem do
         use Depot,
-          adapter: Depot.Adapter.Local,
-          prefix: prefix
+          adapter: DepotS3,
+          bucket: "default",
+          config: [
+            access_key_id: "key",
+            secret_access_key: "secret",
+            scheme: "https://",
+            region: "eu-west-1",
+            host: "s3.eu-west-1.amazonaws.com",
+            port: 443
+          ]
       end
 
-      LocalFileSystem.write("test.txt", "Hello World")
-      {:ok, "Hello World"} = LocalFileSystem.read("test.txt")
+      S3FileSystem.write("test.txt", "Hello World")
+      {:ok, "Hello World"} = S3FileSystem.read("test.txt")
   """
 
   defmodule Config do
