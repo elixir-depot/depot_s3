@@ -14,9 +14,15 @@ defmodule DepotS3.Minio do
     ]
   end
 
-  def recreate_bucket(name) do
-    ExAws.S3.delete_bucket(name)
+  def initialize_bucket(name) do
+    ExAws.S3.put_bucket(name, Keyword.fetch!(config(), :region))
     |> ExAws.request(config())
+  end
+
+  def recreate_bucket(name) do
+    {:ok, _} =
+      ExAws.S3.delete_bucket(name)
+      |> ExAws.request(config())
 
     {:ok, _} =
       ExAws.S3.put_bucket(name, Keyword.fetch!(config(), :region))
@@ -24,12 +30,12 @@ defmodule DepotS3.Minio do
   end
 
   def clean_bucket(name) do
-    list_objects = ExAws.S3.list_objects(name)
+    {:ok, %{body: %{contents: list}}} =
+      ExAws.S3.list_objects(name)
+      |> ExAws.request(config())
 
-    with {:ok, %{body: %{contents: list}}} <- ExAws.request(list_objects, config()) do
-      for item <- list do
-        ExAws.S3.delete_object(name, item.key) |> ExAws.request(config())
-      end
+    for item <- list do
+      ExAws.S3.delete_object(name, item.key) |> ExAws.request(config())
     end
   end
 end
