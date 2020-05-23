@@ -1,0 +1,53 @@
+name: Elixir CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  test:
+
+    runs-on: ubuntu-latest
+
+    # services:
+    #   postgres:
+    #     image: postgres:12
+    #     ports:
+    #       - 5432:5432
+    #     env:
+    #       POSTGRES_USER: postgres
+    #       POSTGRES_PASSWORD: postgres
+    #     # Set health checks to wait until postgres has started
+    #     options: >-
+    #       --health-cmd pg_isready
+    #       --health-interval 10s
+    #       --health-timeout 5s
+    #       --health-retries 5
+
+    env:
+      MIX_ENV: test
+
+    steps:
+    - uses: actions/checkout@v2
+    - uses: actions/cache@v1
+      with:
+        path: deps
+        key: ${{ runner.os }}-mix-deps-${{ hashFiles(format('{0}{1}', github.workspace, '/mix.lock')) }}
+        restore-keys: |
+          ${{ runner.os }}-mix-deps
+    - uses: actions/cache@v1
+      with:
+        path: _build
+        key: ${{ runner.os }}-mix-build-${{ hashFiles(format('{0}{1}', github.workspace, '/mix.lock')) }}
+        restore-keys: |
+          ${{ runner.os }}-mix-build
+    - uses: actions/setup-elixir@v1
+      with:
+        otp-version: 22.2
+        elixir-version: 1.10.3
+    - run: mix deps.get
+    - run: mix minio_server.download --arch linux-amd64
+    - run: chmod +x _build/test/lib/minio_server/priv/minio/linux-amd64/minio
+    - run: mix test
