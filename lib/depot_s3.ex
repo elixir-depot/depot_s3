@@ -74,8 +74,10 @@ defmodule DepotS3 do
 
     operation = ExAws.S3.get_object(config.bucket, path)
 
-    with {:ok, %{body: body}} <- ExAws.request(operation, config.config) do
-      {:ok, body}
+    case ExAws.request(operation, config.config) do
+      {:ok, %{body: body}} -> {:ok, body}
+      {:error, {:http_error, 404, _}} -> {:error, :enoent}
+      rest -> rest
     end
   end
 
@@ -87,7 +89,6 @@ defmodule DepotS3 do
 
     case ExAws.request(operation, config.config) do
       {:ok, _} -> :ok
-      {:error, %{status_code: 404}} -> :ok
       rest -> rest
     end
   end
@@ -108,7 +109,7 @@ defmodule DepotS3 do
 
     case ExAws.request(operation, config.config) do
       {:ok, _} -> :ok
-      {:error, %{status_code: 404}} -> :ok
+      {:error, {:http_error, 404, _}} -> {:error, :enoent}
       rest -> rest
     end
   end

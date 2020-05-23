@@ -4,7 +4,7 @@ defmodule DepotS3.MixProject do
   def project do
     [
       app: :depot_s3,
-      version: "0.1.0",
+      version: "0.1.1",
       elixir: "~> 1.10",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -42,7 +42,7 @@ defmodule DepotS3.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:depot, "~> 0.2.1"},
+      {:depot, "~> 0.2.2"},
       {:ex_aws, "~> 2.1"},
       {:ex_aws_s3, "~> 2.0"},
       {:hackney, "~> 1.9"},
