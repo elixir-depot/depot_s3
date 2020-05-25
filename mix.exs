@@ -12,7 +12,7 @@ defmodule DepotS3.MixProject do
       description: description(),
       package: package(),
       name: "Depot S3",
-      source_url: "https://github.com/LostKobrakai/depot_s3"
+      source_url: "https://github.com/elixir-depot/depot_s3"
     ]
   end
 
@@ -25,7 +25,7 @@ defmodule DepotS3.MixProject do
       # These are the default files included in the package
       files: ~w(lib mix.exs README* LICENSE*),
       licenses: ["Apache-2.0"],
-      links: %{"GitHub" => "https://github.com/LostKobrakai/depot_s3"}
+      links: %{"GitHub" => "https://github.com/elixir-depot/depot_s3"}
     ]
   end
 
