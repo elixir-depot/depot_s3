@@ -82,6 +82,45 @@ defmodule DepotS3 do
   end
 
   @impl Depot.Adapter
+  def read_stream(%Config{} = config, path) do
+    path = Depot.RelativePath.join_prefix(config.prefix, path)
+
+    operation = ExAws.S3.presigned_url(config.config |> Enum.into(Map.new()), :get, config.bucket, path)
+
+    case operation do
+      {:ok, url} ->
+        stream =  Stream.resource(
+          # Initiate
+          fn -> {:ok, _status, headers, client} = :hackney.get(url, [], "")
+            content_length = Enum.find_value(headers, fn
+              {"Content-Length" = header, value} -> value |> String.to_integer()
+              _ -> false
+            end)
+
+            {client, content_length, 0}
+          end,
+          # Iterate
+          fn {client, total_size, size} ->
+            case :hackney.stream_body(client) do
+              {:ok, data} ->
+                {[data], {client, total_size, size + byte_size(data)}}
+              :done ->
+                {:halt, nil}
+              {:error, reason} ->
+                raise reason
+            end
+          end,
+          # Terminate
+          fn _ -> [] end
+        )
+
+        {:ok, stream}
+      {:error, {:http_error, 404, _}} -> {:error, :enoent}
+      rest -> rest
+    end
+  end
+
+  @impl Depot.Adapter
   def delete(%Config{} = config, path) do
     path = Depot.RelativePath.join_prefix(config.prefix, path)
 
