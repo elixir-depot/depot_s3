@@ -81,45 +81,32 @@ defmodule DepotS3 do
     end
   end
 
+  # TODO: This next section has been copied from ex_aws_s3 and can likely be replaced
+  # as soon as there is a release on this merge request:
+  # https://github.com/ex-aws/ex_aws_s3/pull/60/commits/6b9fdac73b62dee14bffb939965742f2576f2a7b#diff-50dc7f8117b1be05295369ca23e8fa73
   @impl Depot.Adapter
-  def read_stream(%Config{} = config, path) do
+  def read_stream(%Config{} = config, path, opts) do
     path = Depot.RelativePath.join_prefix(config.prefix, path)
 
     with {:ok, :exists} <- file_exists(config, path)
     do
-      operation = ExAws.S3.presigned_url(config.config |> Enum.into(Map.new()), :get, config.bucket, path)
+      op = ExAws.S3.download_file(config.bucket, path, "", opts)
+      stream = op
+      |> ExAws.S3.Download.build_chunk_stream(config.config)
+      |> Task.async_stream(fn boundaries ->
+          ExAws.S3.Download.get_chunk(op, boundaries, config.config)
+        end,
+        max_concurrency: Keyword.get(op.opts, :max_concurrency, 8),
+        timeout: Keyword.get(op.opts, :timeout, 60_000)
+      )
+      |> Stream.map(fn
+        # Download.get_chunk/3 uses ExAws.request! so if we get here it is
+        # successful otherwise it has already risen an error
+        {:ok, {_start_byte, chunk}} ->
+          chunk
+      end)
 
-      case operation do
-        {:ok, url} ->
-          stream =  Stream.resource(
-            # Initiate
-            fn -> {:ok, _status, headers, client} = :hackney.get(url, [], "")
-                  content_length = Enum.find_value(headers, fn
-                    {"Content-Length" = header, value} -> value |> String.to_integer()
-                    _ -> false
-                  end)
-
-                  {client, content_length, 0}
-            end,
-            # Iterate
-            fn {client, total_size, size} ->
-              case :hackney.stream_body(client) do
-                {:ok, data} ->
-                  {[data], {client, total_size, size + byte_size(data)}}
-                :done ->
-                  {:halt, nil}
-                {:error, reason} ->
-                  raise reason
-              end
-            end,
-            # Terminate
-            fn _ -> [] end
-          )
-
-          {:ok, stream}
-        {:error, {:http_error, 404, _}} -> {:error, :enoent}
-        rest -> rest
-      end
+      {:ok, stream}
     else
       {:ok, :missing} -> {:error, :enoent}
     end
