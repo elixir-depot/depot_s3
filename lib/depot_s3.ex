@@ -81,6 +81,37 @@ defmodule DepotS3 do
     end
   end
 
+  # TODO: This next section has been copied from ex_aws_s3 and can likely be replaced
+  # as soon as there is a release on this merge request:
+  # https://github.com/ex-aws/ex_aws_s3/pull/60/commits/6b9fdac73b62dee14bffb939965742f2576f2a7b#diff-50dc7f8117b1be05295369ca23e8fa73
+  @impl Depot.Adapter
+  def read_stream(%Config{} = config, path, opts) do
+    path = Depot.RelativePath.join_prefix(config.prefix, path)
+
+    with {:ok, :exists} <- file_exists(config, path)
+    do
+      op = ExAws.S3.download_file(config.bucket, path, "", opts)
+      stream = op
+      |> ExAws.S3.Download.build_chunk_stream(config.config)
+      |> Task.async_stream(fn boundaries ->
+          ExAws.S3.Download.get_chunk(op, boundaries, config.config)
+        end,
+        max_concurrency: Keyword.get(op.opts, :max_concurrency, 8),
+        timeout: Keyword.get(op.opts, :timeout, 60_000)
+      )
+      |> Stream.map(fn
+        # Download.get_chunk/3 uses ExAws.request! so if we get here it is
+        # successful otherwise it has already risen an error
+        {:ok, {_start_byte, chunk}} ->
+          chunk
+      end)
+
+      {:ok, stream}
+    else
+      {:ok, :missing} -> {:error, :enoent}
+    end
+  end
+
   @impl Depot.Adapter
   def delete(%Config{} = config, path) do
     path = Depot.RelativePath.join_prefix(config.prefix, path)
