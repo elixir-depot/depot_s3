@@ -252,20 +252,43 @@ defmodule DepotS3 do
     operation = ExAws.S3.list_objects(config.bucket, prefix: path)
 
     with {:ok, %{body: %{contents: files}}} <- ExAws.request(operation, config.config) do
-      contents =
-        for file <- files do
-          {:ok, dt, 0} = DateTime.from_iso8601(file.last_modified)
-
-          %Depot.Stat.File{
-            name: Depot.RelativePath.strip_prefix(config.prefix, file.key),
-            size: String.to_integer(file.size),
-            mtime: dt
-          }
-        end
+      contents = convert_object_list_to_ls(config.prefix, files)
 
       {:ok, contents}
     else
       rest -> rest
     end
+  end
+
+  def convert_object_list_to_ls(prefix, files) do
+    files
+    |> Enum.with_index()
+    |> Enum.reduce(%{}, fn {file, index}, acc ->
+      filename = Depot.RelativePath.strip_prefix(prefix, file.key)
+      {:ok, dt, 0} = DateTime.from_iso8601(file.last_modified)
+      size = String.to_integer(file.size)
+
+      case Path.split(filename) do
+        [_] ->
+          file = %Depot.Stat.File{name: filename, size: size, mtime: dt}
+          Map.put(acc, filename, {index, file})
+
+        [folder | _] ->
+          dir = %Depot.Stat.Dir{name: folder, size: size, mtime: dt}
+
+          Map.update(acc, folder, {index, dir}, fn {index, current} ->
+            new =
+              struct!(current,
+                size: current.size + dir.size,
+                mtime: max(current.mtime, dir.mtime)
+              )
+
+            {index, new}
+          end)
+      end
+    end)
+    |> Map.values()
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.map(&elem(&1, 1))
   end
 end
