@@ -204,13 +204,31 @@ defmodule DepotS3 do
   def copy(%Config{} = config, source, destination) do
     source = Depot.RelativePath.join_prefix(config.prefix, source)
     destination = Depot.RelativePath.join_prefix(config.prefix, destination)
+    do_copy(config.config, {config.bucket, source}, {config.bucket, destination})
+  end
 
-    operation = ExAws.S3.put_object_copy(config.bucket, destination, config.bucket, source)
+  defp do_copy(config, {source_bucket, source_path}, {destination_bucket, destination_path}) do
+    operation =
+      ExAws.S3.put_object_copy(destination_bucket, destination_path, source_bucket, source_path)
 
-    case ExAws.request(operation, config.config) do
+    case ExAws.request(operation, config) do
       {:ok, _} -> :ok
       {:error, {:http_error, 404, _}} -> {:error, :enoent}
       rest -> rest
+    end
+  end
+
+  @impl Depot.Adapter
+  def copy(%Config{} = source_config, source, %Config{} = destination_config, destination) do
+    case {source_config.config, destination_config.config} do
+      # Cross bucket copy
+      {config, config} ->
+        source = Depot.RelativePath.join_prefix(source_config.prefix, source)
+        destination = Depot.RelativePath.join_prefix(destination_config.prefix, destination)
+        do_copy(config, {source_config.bucket, source}, {destination_config.bucket, destination})
+
+      _ ->
+        {:error, :unsupported}
     end
   end
 
