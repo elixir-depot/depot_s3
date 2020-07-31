@@ -41,6 +41,63 @@ defmodule DepotS3 do
     defstruct config: nil, bucket: nil, prefix: nil
   end
 
+  defmodule StreamUpload do
+    @enforce_keys [:config, :path]
+    defstruct config: nil, path: nil, opts: []
+
+    defimpl Collectable do
+      defp upload_part(config, path, id, index, data, opts) do
+        %{headers: headers} =
+          ExAws.S3.upload_part(config.bucket, path, id, index, data, opts)
+          |> ExAws.request!(config.config)
+
+        {_, etag} = Enum.find(headers, fn {k, _v} -> String.downcase(k) == "etag" end)
+        etag
+      end
+
+      def into(%{config: config, path: path, opts: opts} = stream) do
+        {:ok, %{body: %{upload_id: upload_id}}} =
+          ExAws.S3.initiate_multipart_upload(config.bucket, path, opts)
+          |> ExAws.request(config.config)
+
+        collector_fun = fn
+          %{acc: acc} = data, {:cont, elem}
+          when is_binary(elem) and byte_size(acc) + byte_size(elem) >= 5 * 1024 * 1024 ->
+            etag = upload_part(config, path, data.upload_id, data.index, acc <> elem, opts)
+            %{data | acc: "", index: data.index + 1, etags: [{data.index, etag} | data.etags]}
+
+          %{acc: acc} = data, {:cont, elem} ->
+            %{data | acc: acc <> elem}
+
+          %{acc: acc} = data, :done ->
+            data =
+              if byte_size(acc) == 0 do
+                data
+              else
+                etag = upload_part(config, path, data.upload_id, data.index, acc, opts)
+                %{data | acc: "", index: data.index + 1, etags: [{data.index, etag} | data.etags]}
+              end
+
+            {:ok, _} =
+              ExAws.S3.complete_multipart_upload(
+                config.bucket,
+                path,
+                data.upload_id,
+                Enum.sort_by(data.etags, &elem(&1, 0))
+              )
+              |> ExAws.request(config.config)
+
+            stream
+
+          _set, :halt ->
+            :ok
+        end
+
+        {%{upload_id: upload_id, acc: "", index: 0, etags: []}, collector_fun}
+      end
+    end
+  end
+
   @behaviour Depot.Adapter
 
   @impl Depot.Adapter
@@ -69,6 +126,16 @@ defmodule DepotS3 do
   end
 
   @impl Depot.Adapter
+  def write_stream(%Config{} = config, path, opts) do
+    {:ok,
+     %StreamUpload{
+       config: config,
+       path: path,
+       opts: opts
+     }}
+  end
+
+  @impl Depot.Adapter
   def read(%Config{} = config, path) do
     path = Depot.RelativePath.join_prefix(config.prefix, path)
 
@@ -88,23 +155,25 @@ defmodule DepotS3 do
   def read_stream(%Config{} = config, path, opts) do
     path = Depot.RelativePath.join_prefix(config.prefix, path)
 
-    with {:ok, :exists} <- file_exists(config, path)
-    do
+    with {:ok, :exists} <- file_exists(config, path) do
       op = ExAws.S3.download_file(config.bucket, path, "", opts)
-      stream = op
-      |> ExAws.S3.Download.build_chunk_stream(config.config)
-      |> Task.async_stream(fn boundaries ->
-          ExAws.S3.Download.get_chunk(op, boundaries, config.config)
-        end,
-        max_concurrency: Keyword.get(op.opts, :max_concurrency, 8),
-        timeout: Keyword.get(op.opts, :timeout, 60_000)
-      )
-      |> Stream.map(fn
-        # Download.get_chunk/3 uses ExAws.request! so if we get here it is
-        # successful otherwise it has already risen an error
-        {:ok, {_start_byte, chunk}} ->
-          chunk
-      end)
+
+      stream =
+        op
+        |> ExAws.S3.Download.build_chunk_stream(config.config)
+        |> Task.async_stream(
+          fn boundaries ->
+            ExAws.S3.Download.get_chunk(op, boundaries, config.config)
+          end,
+          max_concurrency: Keyword.get(op.opts, :max_concurrency, 8),
+          timeout: Keyword.get(op.opts, :timeout, 60_000)
+        )
+        |> Stream.map(fn
+          # Download.get_chunk/3 uses ExAws.request! so if we get here it is
+          # successful otherwise it has already risen an error
+          {:ok, {_start_byte, chunk}} ->
+            chunk
+        end)
 
       {:ok, stream}
     else
