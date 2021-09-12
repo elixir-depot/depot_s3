@@ -249,9 +249,10 @@ defmodule DepotS3 do
   def list_contents(%Config{} = config, path) do
     path = Depot.RelativePath.join_prefix(config.prefix, path)
 
-    operation = ExAws.S3.list_objects(config.bucket, prefix: path)
+    operation = ExAws.S3.list_objects_v2(config.bucket, prefix: path, stream_prefixes: true)
 
-    with {:ok, %{body: %{contents: files}}} <- ExAws.request(operation, config.config) do
+    with {:ok, %{body: %{contents: files}}} <-
+           ExAws.request(operation, config.config) do
       contents = convert_object_list_to_ls(config.prefix, files)
 
       {:ok, contents}
@@ -260,7 +261,7 @@ defmodule DepotS3 do
     end
   end
 
-  def convert_object_list_to_ls(prefix, files) do
+  defp convert_object_list_to_ls(prefix, files) do
     files
     |> Enum.with_index()
     |> Enum.reduce(%{}, fn {file, index}, acc ->
@@ -268,12 +269,12 @@ defmodule DepotS3 do
       {:ok, dt, 0} = DateTime.from_iso8601(file.last_modified)
       size = String.to_integer(file.size)
 
-      case Path.split(filename) do
-        [_] ->
+      case {String.last(filename) == "/", Path.split(filename)} do
+        {false, [_]} ->
           file = %Depot.Stat.File{name: filename, size: size, mtime: dt}
           Map.put(acc, filename, {index, file})
 
-        [folder | _] ->
+        {_, [folder | _]} ->
           dir = %Depot.Stat.Dir{name: folder, size: size, mtime: dt}
 
           Map.update(acc, folder, {index, dir}, fn {index, current} ->
@@ -290,5 +291,51 @@ defmodule DepotS3 do
     |> Map.values()
     |> Enum.sort_by(&elem(&1, 0))
     |> Enum.map(&elem(&1, 1))
+  end
+
+  @impl Depot.Adapter
+  def create_directory(config, path) do
+    write(config, path, "")
+  end
+
+  @impl Depot.Adapter
+  def delete_directory(config, path, opts) do
+    path = Depot.RelativePath.join_prefix(config.prefix, path)
+
+    if Keyword.get(opts, :recursive, false) do
+      try do
+        config.bucket
+        |> ExAws.S3.list_objects_v2(prefix: path, stream_prefixes: true)
+        |> ExAws.stream!(config.config)
+        |> Task.async_stream(fn %{key: key} ->
+          config.bucket
+          |> ExAws.S3.delete_object(key)
+          |> ExAws.request(config.config)
+          |> case do
+            {:ok, _} -> {:ok, :exists}
+            {:error, {:http_error, 404, _}} -> {:ok, :missing}
+            rest -> throw(rest)
+          end
+        end)
+        |> Stream.run()
+      catch
+        error -> error
+      end
+    else
+      operation =
+        ExAws.S3.list_objects_v2(config.bucket, prefix: path, stream_prefixes: true, max_keys: 2)
+
+      case ExAws.request(operation, config.config) do
+        {:ok, %{body: %{contents: []}}} -> delete(config, path)
+        {:error, {:http_error, 404, _}} -> :ok
+        {:ok, %{body: %{contents: _}}} -> {:error, :eexist}
+        rest -> rest
+      end
+    end
+  end
+
+  @impl Depot.Adapter
+  def clear(config) do
+    delete_directory(config, "/", recursive: true)
   end
 end

@@ -1,6 +1,6 @@
 # DepotS3
 
-**TODO: Add description**
+Depot adapter for S3 file storage systems.
 
 ## Installation
 

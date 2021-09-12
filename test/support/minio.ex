@@ -1,6 +1,29 @@
 defmodule DepotS3.Minio do
+  require Logger
+
   def start_link do
-    MinioServer.start_link(config())
+    cur = Process.flag(:trap_exit, true)
+
+    try do
+      {:ok, _pid} = MinioServer.start_link(config())
+    rescue
+      exception in [MatchError] ->
+        case exception.term do
+          {:error, {:shutdown, {:failed_to_start_child, MuonTrap.Daemon, {:enoent, _}}}} ->
+            reraise """
+                    Minio binaries not available.
+
+                    Make sure to to run:
+                    $ MIX_ENV=test mix minio_server.download --arch … --version latest
+                    """,
+                    __STACKTRACE__
+
+          _ ->
+            reraise exception, __STACKTRACE__
+        end
+    after
+      Process.flag(:trap_exit, cur)
+    end
   end
 
   def config do
@@ -10,7 +33,8 @@ defmodule DepotS3.Minio do
       scheme: "http://",
       region: "local",
       host: "127.0.0.1",
-      port: 9000
+      port: 9000,
+      console_address: ":9001"
     ]
   end
 
